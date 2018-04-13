@@ -1,1 +1,86 @@
+import numpy as np
+import tensorflow as tf
+import scipy.io as sio
+
+# 读取mat文件
+load_data = sio.loadmat('y2_new.mat')
+xn1 = load_data['y2']     # 1768*1000 array
+load_data = sio.loadmat('y3_new.mat')
+xn2 = load_data['y3']     # 1768*1000 array
+load_data = sio.loadmat('TEST_S02_T02_2.mat')
+test_xn1 = load_data['yn2']  # 144*1000 array
+load_data = sio.loadmat('TEST_S02_T02_3.mat')
+test_xn2 = load_data['yn3']
+load_data = sio.loadmat('rawppg.mat')
+true_xn = load_data['rawppg']     # 1768*1000 array
+
+
+batch_size = 8  # 8*221=1768
+epoch = 221
+X_in = tf.placeholder(dtype=tf.float32, shape=[None, 1000], name='X')
+Y = tf.placeholder(dtype=tf.float32, shape=[None, 1000], name='Y')
+keep_prob = tf.placeholder(dtype=tf.float32, name='keep_prob')
+n_latent = 8
+learning_rate = 0.0005
+iteration = 1000
+
+def lrelu(x, alpha=0.3):
+    return tf.maximum(x, tf.multiply(x, alpha))
+
+
+def encoder(X_in, keep_prob):
+    x = tf.layers.dense(X_in, units=784)
+    x = tf.reshape(x, shape=[-1, 28, 28, 1])
+    x = tf.layers.conv2d(x, filters=64, kernel_size=4, strides=2, padding='SAME', activation=tf.nn.sigmoid)
+    x = tf.nn.dropout(x, keep_prob)
+    x = tf.layers.conv2d(x, filters=64, kernel_size=4, strides=2, padding='SAME', activation=tf.nn.sigmoid)
+    x = tf.nn.dropout(x, keep_prob)
+    x = tf.layers.conv2d(x, filters=32, kernel_size=4, strides=1, padding='SAME', activation=tf.nn.sigmoid)
+    x = tf.nn.dropout(x, keep_prob)
+    x = tf.contrib.layers.flatten(x)
+    mn = tf.layers.dense(x, units=n_latent)
+    sd = 0.5*tf.layers.dense(x, units=n_latent)
+    epsilon = tf.random_normal(tf.stack([tf.shape(x)[0], n_latent]))
+    z = mn+tf.multiply(epsilon, tf.exp(sd))
+    return z, mn, sd
+
+
+def decoder(sample_z, keep_prob):
+    x = tf.layers.dense(sample_z, units=49, activation=lrelu)
+    x = tf.reshape(x, shape=[-1, 7, 7, 1])
+    x = tf.layers.conv2d_transpose(x, filters=64, kernel_size=4, strides=2, padding='SAME', activation=tf.nn.relu)
+    x = tf.nn.dropout(x, keep_prob)
+    x = tf.layers.conv2d_transpose(x, filters=64, kernel_size=4, strides=2, padding='SAME', activation=tf.nn.relu)
+    x = tf.nn.dropout(x, keep_prob)
+    x = tf.layers.conv2d_transpose(x, filters=64, kernel_size=4, strides=1, padding='SAME', activation=tf.nn.relu)
+    x = tf.contrib.layers.flatten(x)
+    x = tf.layers.dense(x, units=784)
+    x = tf.layers.dense(x, units=1000)
+    return x
+
+
+z, mn, sd = encoder(X_in, keep_prob)
+dec = decoder(z, keep_prob)
+
+
+sig_loss = tf.reduce_sum(tf.squared_difference(dec, Y), 1)
+latent_loss = -0.5*tf.reduce_sum(1.0+2.0*sd-tf.square(mn)-tf.exp(2.0*sd), 1)
+loss = tf.reduce_mean(sig_loss+latent_loss)
+optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss)
+sess = tf.Session()
+sess.run(tf.global_variables_initializer())
+
+
+# 训练
+for i in range(iteration):
+    for j in range(epoch):
+        batch = xn1[j*batch_size:(j+1)*batch_size, :]
+        sess.run(optimizer, feed_dict={X_in: batch, Y: batch, keep_prob: 0.8})
+    ls = sess.run(loss, feed_dict={X_in: batch, Y: batch, keep_prob: 1.0})
+    print("Epoch: %04d" % (i + 1), "cost=", "{:.9f}".format(ls))
+
+
+# 测试
+y = sess.run(dec, feed_dict={X_in: test_xn1, keep_prob: 1.0})
+sio.savemat('denoised_y.mat', {'y': y})
 
